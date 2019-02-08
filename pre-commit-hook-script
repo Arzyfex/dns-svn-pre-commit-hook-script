@@ -1,0 +1,40 @@
+#!/bin/bash
+
+set -e
+set -o pipefail
+
+REPOS="$1"
+TXN="$2"
+
+SVNLOOK=/usr/bin/svnlook
+TEMPFILE=/bin/tempfile
+CHECKCONF=/usr/sbin/named-checkconf
+CONF_REPOS="file:///var/lib/svn/conf/bind"
+
+TMPDIR="$(mktemp -d /tmp/bind-svn-test-XXX)"
+BINDDIR=$(mkdir -p "$TMPDIR"/etc/bind/)
+NAMED_CHROOT="$TMPDIR"/etc/bind/
+checkout=$(svn checkout --no-auth-cache --non-interactive "$CONF_REPOS" "$NAMED_CHROOT")
+
+# commit without comment will fail
+$SVNLOOK log -t "$TXN" "$REPOS" | grep -q "[a-zA-Z0-9]" || exit 1
+
+# exclude directories other than bind
+if grep bind <("$SVNLOOK" changed -t "$TXN" "$REPOS"); then
+        # save all the changes in a file
+        ZONEFILES=$(sudo $SVNLOOK diff -t "$TXN" "$REPOS" > "$TMPDIR"/etc/mydiff)
+
+        # merge changes to original files
+        PATCHING=$(cd "$TMPDIR"/etc && patch -p0 < "$TMPDIR"/etc/mydiff && cd -)
+
+        # check committed zone files
+        if ! sudo $CHECKCONF -t "$TMPDIR" -z "/etc/bind/named.conf"; then
+                echo -e "\nERROR : Please fix the above errors before committing your changes." 1>&2
+                exit 1
+        fi
+fi
+
+# Clean up temporary directory
+rm -rf "$TMPDIR"
+
+exit 0
